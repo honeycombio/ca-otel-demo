@@ -1,0 +1,192 @@
+name: Imageme
+
+# This workflow uses actions that are not certified by GitHub.
+# They are provided by a third-party and are governed by
+# separate terms of service, privacy policy, and support
+# documentation.
+
+on:
+  schedule:
+    - cron: '40 22 * * *'
+  push:
+    - 'src/**'
+    - 'test/**'
+    # Publish semver tags as releases.
+  pull_request:
+    - 'src/**'
+    - 'test/**'
+
+env:
+  # Use docker.io for Docker Hub if empty
+  REGISTRY: ghcr.io
+  # github.repository as <account>/<repo>
+  IMAGE_NAME: ${{ github.repository }}
+
+
+jobs:
+  build:
+
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+
+  strategy:
+    fail-fast: false
+    matrix:
+      file_tag:
+        - file: ./src/accountingservice/Dockerfile
+          tag_suffix: accountingservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/adservice/Dockerfile
+          tag_suffix: adservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/cartservice/src/Dockerfile
+          tag_suffix: cartservice
+          context: ./
+          setup-qemu: false
+        - file: ./src/checkoutservice/Dockerfile
+          tag_suffix: checkoutservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/currencyservice/Dockerfile
+          tag_suffix: currencyservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/emailservice/Dockerfile
+          tag_suffix: emailservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/frauddetectionservice/Dockerfile
+          tag_suffix: frauddetectionservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/frontend/Dockerfile
+          tag_suffix: frontend
+          context: ./
+          setup-qemu: true
+        - file: ./src/frontendproxy/Dockerfile
+          tag_suffix: frontendproxy
+          context: ./
+          setup-qemu: true
+        - file: ./src/frontend/Dockerfile.cypress
+          tag_suffix: frontend-tests
+          context: ./
+          setup-qemu: true
+        - file: ./src/imageprovider/Dockerfile
+          tag_suffix: imageprovider
+          context: ./
+          setup-qemu: true
+        - file: ./src/kafka/Dockerfile
+          tag_suffix: kafka
+          context: ./
+          setup-qemu: true
+        - file: ./src/loadgenerator/Dockerfile
+          tag_suffix: loadgenerator
+          context: ./
+          setup-qemu: true
+        - file: ./src/paymentservice/Dockerfile
+          tag_suffix: paymentservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/productcatalogservice/Dockerfile
+          tag_suffix: productcatalogservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/quoteservice/Dockerfile
+          tag_suffix: quoteservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/recommendationservice/Dockerfile
+          tag_suffix: recommendationservice
+          context: ./
+          setup-qemu: true
+        - file: ./src/shippingservice/Dockerfile
+          tag_suffix: shippingservice
+          context: ./
+          setup-qemu: true
+        - file: ./test/tracetesting/Dockerfile
+          tag_suffix: traceBasedTests
+          context: ./
+          setup-qemu: true
+
+    steps:
+      - name: Checkout repository
+        uses: actions/checkout@v4
+      - name: Check for changes and set push options
+        id: check_changes
+        run: |
+          DOCKERFILE_DIR=$(dirname ${{ matrix.file_tag.file }})
+          FILES_CHANGED=$(git diff --name-only ${{ github.event.pull_request.base.sha }} ${{ github.sha }} -- $DOCKERFILE_DIR)
+          FORCE_PUSH=${{ inputs.push }}
+          if [ "$FORCE_PUSH" = true ]; then
+            echo "Force push is enabled, proceeding with build."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          elif [ -z "$FILES_CHANGED" ]; then
+            echo "No changes in ${{ matrix.file_tag.context }}, skipping build."
+            echo "skip=true" >> "$GITHUB_OUTPUT"
+          else
+            echo "Changes detected in ${{ matrix.file_tag.context }}, proceeding with build."
+            echo "skip=false" >> "$GITHUB_OUTPUT"
+          fi
+
+      # Install the cosign tool except on PR
+      # https://github.com/sigstore/cosign-installer
+      - name: Install cosign
+        if: github.event_name != 'pull_request'
+        uses: sigstore/cosign-installer@59acb6260d9c0ba8f4a2f9d9b48431a222b68e20 #v3.5.0
+        with:
+          cosign-release: 'v2.2.4'
+
+      # Set up BuildKit Docker container builder to be able to build
+      # multi-platform images and export cache
+      # https://github.com/docker/setup-buildx-action
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
+
+      - name: Set up QEMU
+        if: ${{ matrix.file_tag.setup-qemu }}
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:master
+
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+      # Extract metadata (tags, labels) for Docker
+      # https://github.com/docker/metadata-action
+     # - name: Extract Docker metadata
+     #   id: meta
+     #   uses: docker/metadata-action@96383f45573cb7f253c731d3b3ab81c87ef81934 # v5.0.0
+     #   with:
+     #     images: ${{ env.REGISTRY }}/${{ env.IMAGE_NAME }}
+
+      # Build and push Docker image with Buildx (don't push on PR)
+      # https://github.com/docker/build-push-action
+      - name: Build and push Docker image
+        id: build-and-push
+        uses: docker/build-push-action@0565240e2d4ab88bba5387d719585280857ece09 # v5.0.0
+        with:
+          context: ${{ matrix.file_tag.context }}
+          file: ${{ matrix.file_tag.file }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ inputs.push }}
+          tags: |
+            ${{ inputs.dockerhub_repo }}:${{ inputs.version }}-${{matrix.file_tag.tag_suffix }}
+            ${{ inputs.dockerhub_repo }}:latest-${{matrix.file_tag.tag_suffix }}
+            ${{ inputs.ghcr_repo }}:${{ inputs.version }}-${{ matrix.file_tag.tag_suffix }}
+            ${{ inputs.ghcr_repo }}:latest-${{ matrix.file_tag.tag_suffix }}
+          cache-from: type=gha
+          cache-to: type=gha
