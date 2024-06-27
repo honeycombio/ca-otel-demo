@@ -1,0 +1,175 @@
+name: imagebp
+
+on:
+  workflow_dispatch:
+    inputs:
+      ghcr_repo:
+        description: GHCR repository
+        default: 'ghcr.io/honeycombio/ca-otel-demo'
+        required: false
+        type: string
+        
+      version:
+        description: The version used when tagging the image
+        default: 'dev'
+        required: false
+        type: string
+      
+
+env:
+  RELEASE_VERSION: "${{ github.event.release.tag_name }}"
+     # Use docker.io for Docker Hub if empty
+  REGISTRY: ghcr.io
+    # github.repository as <account>/<repo> 
+  IMAGE_NAME: ${{ github.repository }}
+
+jobs:
+  build_and_push_images:
+    runs-on: ubuntu-latest
+    permissions:
+      contents: read
+      packages: write
+      # This is used to complete the identity challenge
+      # with sigstore/fulcio when running outside of PRs.
+      id-token: write
+
+    strategy:
+      fail-fast: false
+      matrix:
+        file_tag:
+          - file: ./src/accountingservice/Dockerfile
+            tag_suffix: accountingservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/adservice/Dockerfile
+            tag_suffix: adservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/cartservice/src/Dockerfile
+            tag_suffix: cartservice
+            context: ./
+            setup-qemu: false
+          - file: ./src/checkoutservice/Dockerfile
+            tag_suffix: checkoutservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/currencyservice/Dockerfile
+            tag_suffix: currencyservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/emailservice/Dockerfile
+            tag_suffix: emailservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/frauddetectionservice/Dockerfile
+            tag_suffix: frauddetectionservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/frontend/Dockerfile
+            tag_suffix: frontend
+            context: ./
+            setup-qemu: true
+          - file: ./src/frontendproxy/Dockerfile
+            tag_suffix: frontendproxy
+            context: ./
+            setup-qemu: true
+          - file: ./src/frontend/Dockerfile.cypress
+            tag_suffix: frontend-tests
+            context: ./
+            setup-qemu: true
+          - file: ./src/imageprovider/Dockerfile
+            tag_suffix: imageprovider
+            context: ./
+            setup-qemu: true
+          - file: ./src/kafka/Dockerfile
+            tag_suffix: kafka
+            context: ./
+            setup-qemu: true
+          - file: ./src/loadgenerator/Dockerfile
+            tag_suffix: loadgenerator
+            context: ./
+            setup-qemu: true
+          - file: ./src/paymentservice/Dockerfile
+            tag_suffix: paymentservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/productcatalogservice/Dockerfile
+            tag_suffix: productcatalogservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/quoteservice/Dockerfile
+            tag_suffix: quoteservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/recommendationservice/Dockerfile
+            tag_suffix: recommendationservice
+            context: ./
+            setup-qemu: true
+          - file: ./src/shippingservice/Dockerfile
+            tag_suffix: shippingservice
+            context: ./
+            setup-qemu: true
+          - file: ./test/tracetesting/Dockerfile
+            tag_suffix: traceBasedTests
+            context: ./
+            setup-qemu: true
+
+    steps:
+      - name: Checkout repo
+        uses: actions/checkout@v4
+        with:
+          fetch-depth: 0
+
+      # Set up BuildKit Docker container builder to be able to build
+      # multi-platform images and export cache
+      # https://github.com/docker/setup-buildx-action
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@f95db51fddba0c2d1ec667646a06c2ce06100226 # v3.0.0
+
+      # Login against a Docker registry except on PR
+      # https://github.com/docker/login-action
+      - name: Log into registry ${{ env.REGISTRY }}
+        if: github.event_name != 'pull_request'
+        uses: docker/login-action@343f7c4344506bcbf9b4de18042ae17996df046d # v3.0.0
+        with:
+          registry: ${{ env.REGISTRY }}
+          username: ${{ github.actor }}
+          password: ${{ secrets.GITHUB_TOKEN }}
+
+    #  - name: Log in to the Container registry
+    #    uses: docker/login-action@v3
+    #    with:
+    #      registry: ghcr.io
+    #      username: ${{ github.repository_owner }}
+    #      password: ${{ secrets.GITHUB_TOKEN }}
+    #    if: ${{ inputs.push }}
+    #  - name: Log in to Docker Hub
+    #    uses: docker/login-action@v3
+    #    with:
+    #      username: ${{ secrets.DOCKER_USERNAME }}
+    #      password: ${{ secrets.DOCKER_PASSWORD }}
+    #    if: ${{ inputs.push }}
+
+      - name: Set up QEMU
+        if: ${{ matrix.file_tag.setup-qemu }}
+        uses: docker/setup-qemu-action@v3
+        with:
+          image: tonistiigi/binfmt:master
+      - name: Set up Docker Buildx
+        uses: docker/setup-buildx-action@v3
+        with:
+          buildkitd-config-inline: |
+            [worker.oci]
+            max-parallelism = 2
+      - name: Matrix Build and push demo images
+        uses: docker/build-push-action@v6.1.0
+        with:
+          context: ${{ matrix.file_tag.context }}
+          file: ${{ matrix.file_tag.file }}
+          platforms: linux/amd64,linux/arm64
+          push: ${{ github.event_name != 'pull_request' }}
+          tags: |
+            ${{ inputs.ghcr_repo }}:${{ inputs.version }}-${{ matrix.file_tag.tag_suffix }}
+            ${{ inputs.ghcr_repo }}:latest-${{ matrix.file_tag.tag_suffix }}
+          cache-from: type=gha
+          cache-to: type=gha
